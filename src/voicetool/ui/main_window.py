@@ -23,7 +23,8 @@ from voicetool.ui.parameter_panel import ParameterPanel
 from voicetool.ui.log_panel import LogPanel
 from voicetool.core.project import Project
 from voicetool.core.segment import Segment
-from voicetool.core.tts_engine import TTSEngine
+from voicetool.core.engine_base import BaseTTSEngine
+from voicetool.core.engine_factory import EngineFactory
 from voicetool.core.audio_processor import AudioProcessor
 from voicetool.core.cache_manager import CacheManager
 from voicetool.core.player import AudioPlayer
@@ -43,7 +44,7 @@ class GenerateWorker(QThread):
     def __init__(
         self,
         project: Project,
-        tts_engine: TTSEngine,
+        tts_engine: BaseTTSEngine,
         audio_processor: AudioProcessor,
         cache_manager: CacheManager,
         app_dir: str,
@@ -125,11 +126,15 @@ class GenerateWorker(QThread):
 class MainWindow(QMainWindow):
     """メインウィンドウ"""
 
-    def __init__(self, app_dir: str):
-        super().__init__()
         self.app_dir = app_dir
         self.project = Project()
-        self.tts_engine = TTSEngine(os.path.join(app_dir, "models"))
+        
+        # エンジンファクトリからエンジンを生成（デフォルト: xtts_v2）
+        self.tts_engine = EngineFactory.create_engine(
+            "xtts_v2", 
+            os.path.join(app_dir, "models")
+        )
+        
         self.audio_processor = AudioProcessor(
             os.path.join(app_dir, "bin"),
             os.path.join(app_dir, "temp"),
