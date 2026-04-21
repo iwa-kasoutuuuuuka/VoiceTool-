@@ -69,9 +69,9 @@ class AudioProcessor:
             logger.error(f"予期せぬコマンド実行エラー ({description}): {e}")
             raise
 
-    def change_pitch(self, input_path: str, semitones: float) -> str:
-        """ピッチを変更（rubberband使用）"""
-        if abs(semitones) < 0.01:
+    def change_pitch(self, input_path: str, semitones: float, curve: Optional[list] = None) -> str:
+        """ピッチを変更（rubberband使用、カーブ対応）"""
+        if not curve and abs(semitones) < 0.1:
             return input_path
 
         if not os.path.exists(self.rubberband_path):
@@ -79,14 +79,42 @@ class AudioProcessor:
             return input_path
 
         output_path = self._get_temp_path()
-        cmd = [
-            self.rubberband_path,
-            "--pitch", str(semitones),
-            "--realtime",
-            input_path,
-            output_path,
-        ]
-        self._run_command(cmd, "ピッチ変更")
+        
+        if curve:
+            # 入力音声の情報を取得
+            import soundfile as sf
+            info = sf.info(input_path)
+            total_frames = info.frames
+            
+            # ピッチマップファイルを作成
+            map_path = output_path + ".map"
+            with open(map_path, "w") as f:
+                # Rubberband のピッチマップ形式: "ソースサンプル位置 ターゲットピッチ比率"
+                for rel_x, p_shift in curve:
+                    sample_pos = int(rel_x * total_frames)
+                    # 相対ピッチ倍率に変換 (2^(semitones/12))
+                    ratio = 2.0 ** ((p_shift + semitones) / 12.0)
+                    f.write(f"{sample_pos} {ratio}\n")
+            
+            cmd = [
+                self.rubberband_path,
+                "-p", str(semitones), # ベースのピッチ
+                "--pitch-map", map_path,
+                input_path,
+                output_path,
+            ]
+            self._run_command(cmd, "時系列ピッチ変更")
+            if os.path.exists(map_path):
+                os.remove(map_path)
+        else:
+            cmd = [
+                self.rubberband_path,
+                "-p", str(semitones),
+                input_path,
+                output_path,
+            ]
+            self._run_command(cmd, "ピッチ変更")
+            
         return output_path
 
     def change_speed(self, input_path: str, speed_factor: float) -> str:
@@ -199,29 +227,6 @@ class AudioProcessor:
         pitch_semitones: float = 0.0,
         speed_factor: float = 1.0,
         volume_db: float = 0.0,
-        pause_after: float = 0.0,
-    ) -> str:
-        """セグメントの音声を一括加工。順序: pitch -> speed -> volume -> pause"""
-        current = input_path
-        temp_files = []
-
-        try:
-            # 1. ピッチ変更
-            result = self.change_pitch(current, pitch_semitones)
-            if result != current:
-                temp_files.append(current if current != input_path else None)
-                current = result
-
-            # 2. 速度変更
-            result = self.change_speed(current, speed_factor)
-            if result != current:
-                temp_files.append(current if current != input_path else None)
-                current = result
-
-            # 3. 音量変更
-            result = self.change_volume(current, volume_db)
-            if result != current:
-                temp_files.append(current if current != input_path else None)
                 current = result
 
             # 4. ポーズ追加

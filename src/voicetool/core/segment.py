@@ -6,7 +6,7 @@
 import hashlib
 import json
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, List, Tuple
 
 
 @dataclass
@@ -45,6 +45,7 @@ class Segment:
     length: float = 1.0         # 長さ係数（0.5 ～ 2.0）
     pause_after: float = 0.5    # セグメント後のポーズ（秒）
     emotion: Emotion = field(default_factory=Emotion)
+    pitch_curve: List[Tuple[float, float]] = field(default_factory=list) # (時間比率 0-1, ピッチシフト半音)
     audio_path: Optional[str] = None  # 加工済み音声のキャッシュパス
     raw_audio_path: Optional[str] = None  # TTS生成直後の音声パス
 
@@ -74,6 +75,7 @@ class Segment:
             "volume": round(self.get_effective_volume(), 4),
             "length": round(self.length, 4),
             "pause_after": round(self.pause_after, 4),
+            "pitch_curve": self.pitch_curve, # 抑揚カーブをキャッシュキーに含める
             "ref_audio": ref_audio,
             "language": language,
         }

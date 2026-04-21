@@ -39,6 +39,7 @@ class GenerateWorker(QThread):
     segment_finished = pyqtSignal(int, str)   # (index, audio_path)
     segment_error = pyqtSignal(int, str)      # (index, error)
     waveform_ready = pyqtSignal(int, object)  # (index, numpy_array)
+    partial_waveform_ready = pyqtSignal(int, object) # 生成中のチャンク
     all_finished = pyqtSignal()
 
     def __init__(
@@ -84,28 +85,41 @@ class GenerateWorker(QThread):
                     seg.audio_path = cached
                     logger.info(f"セグメント {i+1}: キャッシュ使用")
                 else:
-                    # TTS生成
-                    raw_path = self.tts.synthesize(
+                    # TTS 生成（ストリーミング）
+                    all_chunks = []
+                    for chunk in self.tts.synthesize_stream(
                         text=seg.text,
                         speaker_wav=ref_audio,
                         language=language,
-                    )
+                    ):
+                        all_chunks.append(chunk)
+                        # 生成中のデータを一部送信（インクリメンタル描画用）
+                        self.partial_waveform_ready.emit(i, chunk)
+
+                    if not all_chunks:
+                        raise RuntimeError("音声の生成に失敗しました")
+
+                    # 結合してファイル保存（加工前）
+                    raw_audio = np.concatenate(all_chunks)
+                    raw_path = self.processor._get_temp_path()
+                    sf.write(raw_path, raw_audio, self.tts.get_sample_rate())
                     seg.raw_audio_path = raw_path
 
-                    # 音声加工
+                    # 音声加工（ピッチカーブ適用）
                     processed_path = self.processor.process_segment(
                         input_path=raw_path,
                         pitch_semitones=seg.get_effective_pitch(),
                         speed_factor=seg.get_effective_speed(),
                         volume_db=seg.get_effective_volume(),
                         pause_after=seg.pause_after,
+                        pitch_curve=seg.pitch_curve,
                     )
 
                     # キャッシュに保存
                     cached_path = self.cache.put(cache_key, processed_path)
                     seg.audio_path = cached_path
 
-                # 波形データを読み込み
+                # 最終的な波形データを読み込み
                 if seg.audio_path and os.path.exists(seg.audio_path):
                     data, sr = sf.read(seg.audio_path)
                     seg.end = seg.start + len(data) / sr
@@ -401,8 +415,13 @@ class MainWindow(QMainWindow):
         self._generate_worker.segment_finished.connect(self._on_gen_segment_finished)
         self._generate_worker.segment_error.connect(self._on_gen_segment_error)
         self._generate_worker.waveform_ready.connect(self._on_gen_waveform_ready)
+        self._generate_worker.partial_waveform_ready.connect(self._on_gen_partial_waveform)
         self._generate_worker.all_finished.connect(self._on_gen_all_finished)
         self._generate_worker.start()
+
+    def _on_gen_partial_waveform(self, index: int, chunk: np.ndarray):
+        """生成中の波形データ受信"""
+        self.timeline_panel.append_waveform_chunk(index, chunk)
 
     def _on_gen_segment_started(self, index: int, status: str):
         self.statusBar().showMessage(status)

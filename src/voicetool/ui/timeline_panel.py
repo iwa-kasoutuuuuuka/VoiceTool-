@@ -37,6 +37,9 @@ class TimelineCanvas(QWidget):
         self._cursor_position: float = -1.0  # 秒
         self._total_duration: float = 0.0
         self._pixels_per_second: float = 100.0
+        self._edit_mode: str = "select"  # "select" or "pitch"
+        self._is_drawing: bool = False
+        
         self.setMinimumHeight(self.SEGMENT_HEIGHT + self.HEADER_HEIGHT + 20)
         self.setMouseTracking(True)
 
@@ -51,6 +54,18 @@ class TimelineCanvas(QWidget):
         if data.ndim > 1:
             data = data.mean(axis=1)
         self._waveforms[index] = data.astype(np.float32)
+        self.update()
+
+    def append_waveform_chunk(self, index: int, chunk: np.ndarray):
+        """生成中の波形データを追加"""
+        if chunk.ndim > 1:
+            chunk = chunk.mean(axis=1)
+        chunk_f32 = chunk.astype(np.float32)
+        
+        if index not in self._waveforms:
+            self._waveforms[index] = chunk_f32
+        else:
+            self._waveforms[index] = np.concatenate([self._waveforms[index], chunk_f32])
         self.update()
 
     def clear_waveforms(self):
@@ -92,15 +107,70 @@ class TimelineCanvas(QWidget):
         return QRectF()
 
     def mousePressEvent(self, event):
-        """クリックでセグメント選択"""
+        """クリック・ドラッグ開始"""
+        pos = event.position()
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
+            # どのセグメントをクリックしたか
             for i in range(len(self._segments)):
                 rect = self._get_segment_rect(i)
                 if rect.contains(pos):
-                    self.segment_clicked.emit(i)
+                    if self._edit_mode == "select":
+                        self.segment_clicked.emit(i)
+                    elif self._edit_mode == "pitch":
+                        self._selected_index = i
+                        self._is_drawing = True
+                        self._add_pitch_point(i, pos, rect)
                     return
+        
+        elif event.button() == Qt.MouseButton.RightButton:
+            # 右クリックでピッチリセット（ピッチモード時）
+            if self._edit_mode == "pitch":
+                pos = event.position()
+                for i in range(len(self._segments)):
+                    rect = self._get_segment_rect(i)
+                    if rect.contains(pos):
+                        self._segments[i].pitch_curve = []
+                        self.update()
+                        logger.info(f"セグメント {i+1} のピッチをリセットしました")
+                        return
+
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """ドラッグ中"""
+        if self._is_drawing and self._edit_mode == "pitch" and self._selected_index != -1:
+            rect = self._get_segment_rect(self._selected_index)
+            self._add_pitch_point(self._selected_index, event.position(), rect)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """ドラッグ終了"""
+        self._is_drawing = False
+        super().mouseReleaseEvent(event)
+
+    def _add_pitch_point(self, index: int, pos, rect: QRectF):
+        """ピッチポイントを追加（座標を正規化）"""
+        seg = self._segments[index]
+        
+        # セグメント内での相対位置 (0.0 ~ 1.0)
+        rel_x = (pos.x() - rect.x()) / rect.width()
+        rel_x = max(0.0, min(1.0, rel_x))
+        
+        # 高さ方向の相対位置をピッチシフト量に変換 (-12 ～ +12 半音)
+        # 上がプラス、下がマイナス
+        rel_y = (pos.y() - rect.y()) / rect.height()
+        pitch_val = (0.5 - rel_y) * 24.0 # 0.5 が中心(0), 0.0が+12, 1.0が-12
+        pitch_val = max(-12.0, min(12.0, pitch_val))
+        
+        # ソートを維持して追加
+        new_point = (rel_x, pitch_val)
+        curve = seg.pitch_curve
+        # 既存の近いポイントを削除または上書き
+        curve = [p for p in curve if abs(p[0] - rel_x) > 0.02]
+        curve.append(new_point)
+        curve.sort()
+        seg.pitch_curve = curve
+        self.update()
 
     def paintEvent(self, event):
         """タイムラインを描画"""
@@ -176,6 +246,10 @@ class TimelineCanvas(QWidget):
             waveform_rect = QRectF(rect.x() + 2, rect.y() + 22, rect.width() - 4, rect.height() - 26)
             self._draw_segment_waveform(painter, i, waveform_rect)
 
+            # ピッチカーブ描画
+            if seg.pitch_curve:
+                self._draw_pitch_curve(painter, seg.pitch_curve, waveform_rect)
+
             x += seg_width + self.GAP
 
         # 再生カーソル
@@ -244,6 +318,25 @@ class TimelineCanvas(QWidget):
             y_min = center_y - (envelope_min[i] / max_amp) * amp_scale
             painter.drawLine(int(x), int(y_max), int(x), int(y_min))
 
+    def _draw_pitch_curve(self, painter: QPainter, curve: list, rect: QRectF):
+        """ピッチカーブを描画"""
+        if not curve: return
+        
+        path = QPainterPath()
+        for i, (rel_x, pitch_val) in enumerate(curve):
+            px = rect.x() + rel_x * rect.width()
+            # pitch_val (12 to -12) -> y
+            py = rect.y() + rect.height() * (0.5 - pitch_val / 24.0)
+            
+            if i == 0:
+                path.moveTo(px, py)
+            else:
+                path.lineTo(px, py)
+        
+        pen = QPen(QColor(COLORS["success"]), 2)
+        painter.setPen(pen)
+        painter.drawPath(path)
+
     def _time_to_x(self, time_seconds: float) -> float:
         """時間（秒）をX座標に変換"""
         x = self.GAP
@@ -278,15 +371,43 @@ class TimelinePanel(QWidget):
         layout.setSpacing(0)
 
         # ヘッダー
-        header = QLabel("🎞️ タイムライン")
-        header.setObjectName("label_section")
-        header.setFixedHeight(36)
-        header.setStyleSheet(f"""
-            background-color: {COLORS['bg_secondary']};
-            padding-left: 8px;
-            border-bottom: 1px solid {COLORS['border']};
-        """)
-        layout.addWidget(header)
+        header_container = QFrame()
+        header_container.setFixedHeight(36)
+        header_container.setStyleSheet(f"background-color: {COLORS['bg_secondary']}; border-bottom: 1px solid {COLORS['border']};")
+        header_layout = QHBoxLayout(header_container)
+        header_layout.setContentsMargins(8, 0, 8, 0)
+        
+        header_label = QLabel("🎞️ タイムライン")
+        header_label.setObjectName("label_section")
+        header_layout.addWidget(header_label)
+        
+        header_layout.addStretch()
+        
+        # モード切替ボタン
+        from PyQt6.QtWidgets import QPushButton, QButtonGroup
+        self.mode_group = QButtonGroup(self)
+        
+        self.btn_select = QPushButton("選択")
+        self.btn_select.setCheckable(True)
+        self.btn_select.setChecked(True)
+        self.btn_select.setFixedWidth(60)
+        self.btn_select.setStyleSheet("QPushButton { padding: 4px; }")
+        
+        self.btn_pitch = QPushButton("ピッチ")
+        self.btn_pitch.setCheckable(True)
+        self.btn_pitch.setFixedWidth(60)
+        self.btn_pitch.setStyleSheet("QPushButton { padding: 4px; }")
+        
+        self.mode_group.addButton(self.btn_select)
+        self.mode_group.addButton(self.btn_pitch)
+        
+        self.btn_select.clicked.connect(lambda: self._change_mode("select"))
+        self.btn_pitch.clicked.connect(lambda: self._change_mode("pitch"))
+        
+        header_layout.addWidget(self.btn_select)
+        header_layout.addWidget(self.btn_pitch)
+        
+        layout.addWidget(header_container)
 
         # スクロール可能なタイムラインキャンバス
         self.scroll_area = QScrollArea()
@@ -325,3 +446,12 @@ class TimelinePanel(QWidget):
     def set_cursor(self, position_seconds: float):
         """再生カーソルを設定"""
         self.canvas.set_cursor(position_seconds)
+
+    def append_waveform_chunk(self, index: int, chunk: np.ndarray):
+        """生成中の波形データを追加"""
+        self.canvas.append_waveform_chunk(index, chunk)
+
+    def _change_mode(self, mode: str):
+        """編集モードを変更"""
+        self.canvas._edit_mode = mode
+        logger.info(f"タイムラインモード: {mode}")

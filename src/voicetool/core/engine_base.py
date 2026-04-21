@@ -27,6 +27,17 @@ class BaseTTSEngine(ABC):
         pass
 
     @abstractmethod
+    def synthesize_stream(
+        self,
+        text: str,
+        speaker_wav: str,
+        language: str = "ja",
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
+        """テキストから音声をストリーミング合成し、NumPy チャンクを yield する"""
+        pass
+
+    @abstractmethod
     def is_ready(self) -> bool:
         """モデルが読み込まれ、合成可能な状態か"""
         pass
