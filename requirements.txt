@@ -1,0 +1,19 @@
+# VoiceTool 依存パッケージ
+# === UI ===
+PyQt6>=6.6.0
+
+# === 音声合成 ===
+coqui-tts>=0.24.0
+
+# === 深層学習 ===
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# === 音声処理 ===
+numpy>=1.24.0
+soundfile>=0.12.0
+sounddevice>=0.4.6
+pydub>=0.25.1
+
+# === ASR（任意）===
+# faster-whisper>=1.0.0
