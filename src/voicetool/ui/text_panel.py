@@ -22,6 +22,8 @@ class TextPanel(QWidget):
     segment_selected = pyqtSignal(int)
     # 言語変更シグナル
     language_changed = pyqtSignal(str)
+    # AI解析要求
+    auto_analyze_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +44,27 @@ class TextPanel(QWidget):
         header_layout.addWidget(title)
 
         header_layout.addStretch()
+
+        # AI解析ボタン
+        self.btn_ai_analyze = QPushButton("✨ AI解析")
+        self.btn_ai_analyze.setFixedWidth(90)
+        self.btn_ai_analyze.setToolTip("テキストの文脈を解析して感情を自動設定します")
+        self.btn_ai_analyze.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['accent']};
+                color: white;
+                border-radius: 4px;
+                font-weight: bold;
+                padding: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent_hover']};
+            }}
+        """)
+        self.btn_ai_analyze.clicked.connect(self.auto_analyze_requested.emit)
+        header_layout.addWidget(self.btn_ai_analyze)
+
+        header_layout.addSpacing(8)
 
         # 言語選択
         lang_label = QLabel("言語")

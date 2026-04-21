@@ -27,6 +27,7 @@ from voicetool.core.engine_base import BaseTTSEngine
 from voicetool.core.engine_factory import EngineFactory
 from voicetool.core.audio_processor import AudioProcessor
 from voicetool.core.cache_manager import CacheManager
+from voicetool.core.context_analyzer import ContextAnalyzer
 from voicetool.core.player import AudioPlayer
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,7 @@ class MainWindow(QMainWindow):
             os.path.join(app_dir, "temp"),
         )
         self.cache_manager = CacheManager(os.path.join(app_dir, "temp", "cache"))
+        self.context_analyzer = ContextAnalyzer()
         self.player = AudioPlayer()
         self._selected_segment: int = -1
         self._generate_worker: Optional[GenerateWorker] = None
@@ -245,6 +247,7 @@ class MainWindow(QMainWindow):
         self.text_panel.text_changed.connect(self._on_text_changed)
         self.text_panel.segment_selected.connect(self._select_segment)
         self.text_panel.language_changed.connect(self._on_language_changed)
+        self.text_panel.auto_analyze_requested.connect(self._on_auto_analyze_requested)
 
         # タイムラインパネル
         self.timeline_panel.segment_selected.connect(self._select_segment)
@@ -428,6 +431,28 @@ class MainWindow(QMainWindow):
 
     def _on_gen_segment_finished(self, index: int, audio_path: str):
         logger.info(f"セグメント {index + 1} の生成完了")
+
+    def _on_auto_analyze_requested(self):
+        """全セグメントのAI文脈解析を実行"""
+        if not self.project.segments:
+            return
+            
+        self.statusBar().showMessage("AI 文脈解析を実行中...")
+        
+        for seg in self.project.segments:
+            emotion, pitch, speed = self.context_analyzer.analyze(seg.text)
+            seg.emotion = emotion
+            seg.pitch = pitch
+            seg.speed = speed
+            
+        # UI更新（選択中のセグメントのパラメータを再表示）
+        if 0 <= self._selected_segment < len(self.project.segments):
+            self.parameter_panel.load_segment(self.project.segments[self._selected_segment], self._selected_segment)
+        
+        self.timeline_panel.update()
+        self._update_title()
+        self.statusBar().showMessage("AI 文脈解析が完了しました", 3000)
+        logger.info("全セグメントの自動感情アノテーションを完了しました")
 
     def _on_gen_segment_error(self, index: int, error: str):
         logger.error(f"セグメント {index + 1} の生成エラー: {error}")
