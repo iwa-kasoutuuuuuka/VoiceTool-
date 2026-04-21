@@ -71,7 +71,10 @@ class AudioProcessor:
 
     def change_pitch(self, input_path: str, semitones: float, curve: Optional[list] = None) -> str:
         """ピッチを変更（rubberband使用、カーブ対応）"""
-        if not curve and abs(semitones) < 0.1:
+        # 有効なカーブかチェック（2点以上必要）
+        valid_curve = curve and len([p for p in curve if 0.0 <= p[0] <= 1.0]) >= 2
+        
+        if not valid_curve and abs(semitones) < 0.1:
             return input_path
 
         if not os.path.exists(self.rubberband_path):
@@ -79,43 +82,55 @@ class AudioProcessor:
             return input_path
 
         output_path = self._get_temp_path()
+        map_path = None
         
-        if curve:
-            # 入力音声の情報を取得
-            import soundfile as sf
-            info = sf.info(input_path)
-            total_frames = info.frames
-            
-            # ピッチマップファイルを作成
-            map_path = output_path + ".map"
-            with open(map_path, "w") as f:
-                # Rubberband のピッチマップ形式: "ソースサンプル位置 ターゲットピッチ比率"
-                for rel_x, p_shift in curve:
-                    sample_pos = int(rel_x * total_frames)
-                    # 相対ピッチ倍率に変換 (2^(semitones/12))
-                    ratio = 2.0 ** ((p_shift + semitones) / 12.0)
-                    f.write(f"{sample_pos} {ratio}\n")
-            
-            cmd = [
-                self.rubberband_path,
-                "-p", str(semitones), # ベースのピッチ
-                "--pitch-map", map_path,
-                input_path,
-                output_path,
-            ]
-            self._run_command(cmd, "時系列ピッチ変更")
-            if os.path.exists(map_path):
-                os.remove(map_path)
-        else:
-            cmd = [
-                self.rubberband_path,
-                "-p", str(semitones),
-                input_path,
-                output_path,
-            ]
-            self._run_command(cmd, "ピッチ変更")
-            
-        return output_path
+        try:
+            if valid_curve:
+                # 入力音声の情報を取得
+                import soundfile as sf
+                info = sf.info(input_path)
+                total_frames = info.frames
+                
+                # ピッチマップファイルを作成
+                map_path = output_path + ".map"
+                with open(map_path, "w") as f:
+                    # 有効な点のみを抽出
+                    points = sorted([p for p in curve if 0.0 <= p[0] <= 1.0])
+                    for rel_x, p_shift in points:
+                        sample_pos = int(rel_x * total_frames)
+                        # 相対ピッチ倍率に変換 (2^(semitones/12))
+                        ratio = 2.0 ** ((p_shift + semitones) / 12.0)
+                        f.write(f"{sample_pos} {ratio}\n")
+                
+                cmd = [
+                    self.rubberband_path,
+                    "-p", str(semitones), # ベースのピッチ
+                    "--pitch-map", map_path,
+                    input_path,
+                    output_path,
+                ]
+                self._run_command(cmd, "時系列ピッチ変更")
+            else:
+                cmd = [
+                    self.rubberband_path,
+                    "-p", str(semitones),
+                    input_path,
+                    output_path,
+                ]
+                self._run_command(cmd, "ピッチ変更")
+                
+            return output_path
+        except Exception as e:
+            logger.error(f"ピッチ変更エラー: {e}")
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise
+        finally:
+            if map_path and os.path.exists(map_path):
+                try:
+                    os.remove(map_path)
+                except Exception:
+                    pass
 
     def change_speed(self, input_path: str, speed_factor: float) -> str:
         """速度を変更（ffmpeg atempo使用）"""
@@ -227,24 +242,55 @@ class AudioProcessor:
         pitch_semitones: float = 0.0,
         speed_factor: float = 1.0,
         volume_db: float = 0.0,
-                current = result
+        pause_after: float = 0.5,
+        pitch_curve: Optional[list] = None,
+    ) -> str:
+        """セグメント音声に加工を適用（ピッチカーブ対応、中間ファイル管理強化）"""
+        current = input_path
+        temp_files = []
+
+        try:
+            # 1. ピッチ変更（カーブ対応）
+            if pitch_curve or abs(pitch_semitones) > 0.1:
+                result = self.change_pitch(current, pitch_semitones, curve=pitch_curve)
+                if result != current:
+                    temp_files.append(result)
+                    current = result
+
+            # 2. 速度変更
+            if abs(speed_factor - 1.0) > 0.01:
+                result = self.change_speed(current, speed_factor)
+                if result != current:
+                    temp_files.append(result)
+                    current = result
+
+            # 3. 音量変更
+            if abs(volume_db) > 0.1:
+                result = self.change_volume(current, volume_db)
+                if result != current:
+                    temp_files.append(result)
+                    current = result
 
             # 4. ポーズ追加
-            result = self.add_pause(current, pause_after)
-            if result != current:
-                temp_files.append(current if current != input_path else None)
-                current = result
+            if pause_after > 0:
+                result = self.add_pause(current, pause_after)
+                if result != current:
+                    temp_files.append(result)
+                    current = result
 
             return current
 
+        except Exception as e:
+            logger.error(f"セグメント加工プロセスエラー: {e}")
+            raise
         finally:
-            # 中間一時ファイルを削除
+            # 最新の成果物(current)以外の、この過程で作成された中間一時ファイルをすべて削除
             for tf in temp_files:
-                if tf and tf != input_path and tf != current and os.path.exists(tf):
+                if tf and tf != current and tf != input_path and os.path.exists(tf):
                     try:
                         os.remove(tf)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"一時ファイル削除失敗: {tf} {e}")
 
     def concatenate_segments(
         self,
