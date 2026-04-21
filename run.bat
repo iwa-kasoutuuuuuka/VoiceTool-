@@ -18,8 +18,22 @@ if exist "python\python.exe" (
     python\python.exe src\voicetool\main.py
 ) else (
     REM システムPython
-    echo システムPythonを使用します
-    python src\voicetool\main.py
+    echo システムPythonを判定中...
+    where python >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        echo python コマンドを使用します
+        python src\voicetool\main.py
+    ) else (
+        where py >nul 2>nul
+        if %ERRORLEVEL% equ 0 (
+            echo py コマンドを使用します
+            py -3 src\voicetool\main.py
+        ) else (
+            echo [ERROR] Python が見つかりません。Python をインストールするか PATH を通してください。
+            pause
+            exit /b 1
+        )
+    )
 )
 
 if errorlevel 1 (

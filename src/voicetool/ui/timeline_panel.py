@@ -13,6 +13,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath, QLinearGrad
 
 from voicetool.ui.styles import COLORS
 from voicetool.core.segment import Segment
+from voicetool.core.native_bridge import NativeBridge
 
 from typing import List, Optional
 
@@ -206,15 +207,25 @@ class TimelineCanvas(QWidget):
 
         # ダウンサンプリング
         points_count = max(1, w)
-        if len(data) > points_count:
-            block = len(data) // points_count
-            blocks = len(data) // block
-            trimmed = data[:blocks * block].reshape(blocks, block)
-            envelope_max = trimmed.max(axis=1)
-            envelope_min = trimmed.min(axis=1)
+        
+        # ネイティブエンジンの使用を試みる
+        native_result = NativeBridge.get_envelope(data, points_count)
+        
+        if native_result:
+            envelope_min, envelope_max = native_result
         else:
-            envelope_max = data
-            envelope_min = data
+            # フォールバック: NumPy 実装
+            # 余りが出ないように、割り切れる範囲でリシェイプ
+            if len(data) >= points_count:
+                block_size = len(data) // points_count
+                actual_points = len(data) // block_size
+                trimmed_len = actual_points * block_size
+                reshaped = data[:trimmed_len].reshape(actual_points, block_size)
+                envelope_max = reshaped.max(axis=1)
+                envelope_min = reshaped.min(axis=1)
+            else:
+                envelope_max = data
+                envelope_min = data
 
         max_amp = max(np.abs(data).max(), 1e-6)
         amp_scale = h * 0.4
