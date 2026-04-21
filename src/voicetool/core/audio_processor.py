@@ -17,6 +17,7 @@ import shutil
 from typing import Optional
 
 import numpy as np
+from voicetool.core.native_dsp_bridge import NativeDSPBridge
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +113,25 @@ class AudioProcessor:
         return output_path
 
     def change_volume(self, input_path: str, volume_db: float) -> str:
-        """音量を変更（ffmpeg volume使用）"""
+        """音量を変更（ネイティブエンジン優先）"""
         if abs(volume_db) < 0.1:
             return input_path
 
+        # ネイティブエンジンの使用を試みる
+        if NativeDSPBridge.is_available():
+            try:
+                import soundfile as sf
+                data, sr = sf.read(input_path)
+                data = data.astype(np.float32)
+                
+                if NativeDSPBridge.apply_gain(data, volume_db):
+                    output_path = self._get_temp_path()
+                    sf.write(output_path, data, sr)
+                    return output_path
+            except Exception as e:
+                logger.warning(f"ネイティブ音量調整失敗、フォールバックします: {e}")
+
+        # フォールバック: ffmpeg
         if not os.path.exists(self.ffmpeg_path):
             logger.warning("ffmpeg.exeが見つかりません。音量変更をスキップ。")
             return input_path
@@ -132,22 +148,31 @@ class AudioProcessor:
         return output_path
 
     def add_pause(self, input_path: str, pause_seconds: float) -> str:
-        """音声の末尾にポーズ（無音）を追加"""
+        """音声の末尾にポーズ（無音）を追加（ネイティブエンジン優先）"""
         if pause_seconds <= 0:
             return input_path
 
         try:
             import soundfile as sf
             data, sr = sf.read(input_path)
+            data = data.astype(np.float32)
 
-            # 無音を生成
+            # ネイティブエンジンで連結（自分自身 + 無音）
             silence_samples = int(sr * pause_seconds)
-            if data.ndim == 1:
-                silence = np.zeros(silence_samples, dtype=data.dtype)
-            else:
-                silence = np.zeros((silence_samples, data.shape[1]), dtype=data.dtype)
+            
+            if NativeDSPBridge.is_available():
+                result = NativeDSPBridge.concatenate([data], [silence_samples])
+                if result is not None:
+                    output_path = self._get_temp_path()
+                    sf.write(output_path, result, sr)
+                    return output_path
 
-            # 連結
+            # フォールバック: パイソン実装
+            if data.ndim == 1:
+                silence = np.zeros(silence_samples, dtype=np.float32)
+            else:
+                silence = np.zeros((silence_samples, data.shape[1]), dtype=np.float32)
+
             result = np.concatenate([data, silence])
             output_path = self._get_temp_path()
             sf.write(output_path, result, sr)
@@ -226,8 +251,11 @@ class AudioProcessor:
                     logger.warning(f"スキップ（ファイル不在）: {path}")
                     continue
                 data, sr = sf.read(path)
+                data = data.astype(np.float32)
                 if target_sr is None:
                     target_sr = sr
+                
+                # モノラルに統一（ネイティブ処理の単純化のため）
                 if data.ndim > 1:
                     data = data.mean(axis=1)
                 all_data.append(data)
@@ -235,7 +263,11 @@ class AudioProcessor:
             if not all_data:
                 raise ValueError("有効な音声データがありません")
 
-            combined = np.concatenate(all_data)
+            # ネイティブエンジンで高速連結
+            if NativeDSPBridge.is_available():
+                combined = NativeDSPBridge.concatenate(all_data, [0] * len(all_data))
+            else:
+                combined = np.concatenate(all_data)
 
             if output_format == "mp3":
                 temp_wav = self._get_temp_path()
