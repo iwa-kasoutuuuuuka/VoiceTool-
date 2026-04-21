@@ -76,7 +76,10 @@ class NativeDSPBridge:
         
         # NumPy配列をfloat32に強制し、連続メモリであることを確認
         if data.dtype != np.float32:
-            raise ValueError("Data must be float32 for Native DSP")
+            data = data.astype(np.float32)
+        
+        # メモリの連続性を保証
+        data = np.ascontiguousarray(data)
             
         try:
             cls._lib.apply_gain(
@@ -100,7 +103,18 @@ class NativeDSPBridge:
         """
         if not cls.is_available(): return None
         
-        total_samples = sum(len(b) for b in buffers) + sum(silence_samples_list)
+        if not buffers: return None
+        
+        # すべてを float32 かつ連続メモリに変換
+        prepared_buffers = []
+        for b in buffers:
+            if b.size == 0: continue
+            b_f32 = b.astype(np.float32) if b.dtype != np.float32 else b
+            prepared_buffers.append(np.ascontiguousarray(b_f32))
+        
+        if not prepared_buffers: return None
+
+        total_samples = sum(len(b) for b in prepared_buffers) + sum(silence_samples_list)
         if total_samples == 0: return None
         
         # チャンネル数は最初のバッファに合わせる
@@ -117,7 +131,7 @@ class NativeDSPBridge:
         
         try:
             curr_pos = 0
-            for i, buf in enumerate(buffers):
+            for i, buf in enumerate(prepared_buffers):
                 # バッファをコピー
                 n_elements = buf.size
                 cls._lib.copy_buffer(

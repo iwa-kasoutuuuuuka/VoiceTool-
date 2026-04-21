@@ -20,7 +20,8 @@
  * @param gain_raw   倍率 (dBではなく線形倍率)
  */
 EXPORT void apply_gain(float* data, size_t n, float gain_raw) {
-    if (n == 0 || gain_raw == 1.0f) return;
+    if (data == NULL || n == 0 || gain_raw == 1.0f) return;
+    if (!isfinite(gain_raw)) return;
 
     size_t i = 0;
     
@@ -29,6 +30,7 @@ EXPORT void apply_gain(float* data, size_t n, float gain_raw) {
     __m256 vgain = _mm256_set1_ps(gain_raw);
     for (; i + 8 <= n; i += 8) {
         __m256 vdata = _mm256_loadu_ps(&data[i]);
+        // NaN/Inf チェック（必要ならここでマスク可能だが、基本は一括処理）
         vdata = _mm256_mul_ps(vdata, vgain);
         _mm256_storeu_ps(&data[i], vdata);
     }
@@ -43,6 +45,11 @@ EXPORT void apply_gain(float* data, size_t n, float gain_raw) {
     }
 
     for (; i < n; i++) {
+        // 個別サンプルがNaNなら0にするガードを追加
+        if (!isfinite(data[i])) {
+            data[i] = 0.0f;
+            continue;
+        }
         data[i] *= gain_raw;
     }
 }

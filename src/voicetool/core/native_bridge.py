@@ -58,8 +58,14 @@ class NativeBridge:
         if not cls.is_available():
             return None
             
+        if data.size == 0:
+            return np.zeros(width, dtype=np.float32), np.zeros(width, dtype=np.float32)
+
         if data.dtype != np.float32:
             data = data.astype(np.float32)
+        
+        # メモリの連続性を保証
+        data = np.ascontiguousarray(data)
             
         out_min = np.zeros(width, dtype=np.float32)
         out_max = np.zeros(width, dtype=np.float32)
@@ -67,7 +73,7 @@ class NativeBridge:
         try:
             cls._lib.get_envelope(
                 data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                len(data),
+                data.size,
                 width,
                 out_min.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
                 out_max.ctypes.data_as(ctypes.POINTER(ctypes.c_float))

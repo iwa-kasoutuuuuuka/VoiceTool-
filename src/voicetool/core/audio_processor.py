@@ -41,22 +41,33 @@ class AudioProcessor:
         return tempfile.mktemp(suffix=suffix, dir=self.temp_dir, prefix="proc_")
 
     def _run_command(self, cmd: list, description: str = ""):
-        """外部コマンドを実行"""
+        """外部コマンドを実行（堅牢性強化版）"""
+        # 入力ファイルの存在チェック (コマンド内のパスが含まれる場合)
+        for arg in cmd:
+            if isinstance(arg, str) and (arg.endswith(".wav") or arg.endswith(".mp3")) and not arg.startswith("-"):
+                if "proc_" not in arg and not os.path.exists(arg):
+                     logger.warning(f"コマンド実行前にファイル不在を確認: {arg}")
+
         logger.debug(f"コマンド実行 ({description}): {' '.join(cmd)}")
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=180, # タイムアウトを少し延長
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             if result.returncode != 0:
-                logger.error(f"コマンドエラー ({description}): {result.stderr}")
-                raise RuntimeError(f"{description}に失敗: {result.stderr}")
+                err_msg = result.stderr if result.stderr else result.stdout
+                logger.error(f"コマンドエラー ({description}): {err_msg}")
+                raise RuntimeError(f"{description}に失敗: {err_msg}")
             return result
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"{description}がタイムアウトしました")
+            logger.error(f"コマンド実行タイムアウト ({description})")
+            raise RuntimeError(f"{description}がタイムアウトしました。処理を中断します。")
+        except Exception as e:
+            logger.error(f"予期せぬコマンド実行エラー ({description}): {e}")
+            raise
 
     def change_pitch(self, input_path: str, semitones: float) -> str:
         """ピッチを変更（rubberband使用）"""

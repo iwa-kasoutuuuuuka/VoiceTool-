@@ -20,7 +20,7 @@
  * @param out_max       結果の最大値配列 (長さ: width)
  */
 EXPORT void get_envelope(const float* data, size_t total_samples, int width, float* out_min, float* out_max) {
-    if (width <= 0 || total_samples <= 0) return;
+    if (data == NULL || out_min == NULL || out_max == NULL || width <= 0 || total_samples <= 0) return;
 
     size_t samples_per_pixel = total_samples / width;
     if (samples_per_pixel == 0) samples_per_pixel = 1;
