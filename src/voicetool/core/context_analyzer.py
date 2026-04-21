@@ -30,10 +30,10 @@ class ContextAnalyzer:
     def analyze(self, text: str) -> Tuple[Emotion, float, float]:
         """
         テキストを解析して感情とパラメータ（ピッチ、速度）を返す。
-        Returns:
-            (Emotion, recommended_pitch, recommended_speed)
         """
-        if not text:
+        text = text.strip()
+        if len(text) < 2:
+            # 1文字以下の場合はニュートラル設定
             return Emotion(), 0.0, 1.0
 
         scores = {"happy": 0.0, "fun": 0.0, "angry": 0.0, "sad": 0.0}

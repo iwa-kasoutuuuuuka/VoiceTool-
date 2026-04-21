@@ -439,11 +439,17 @@ class MainWindow(QMainWindow):
             
         self.statusBar().showMessage("AI 文脈解析を実行中...")
         
-        for seg in self.project.segments:
+        for i, seg in enumerate(self.project.segments):
             emotion, pitch, speed = self.context_analyzer.analyze(seg.text)
             seg.emotion = emotion
             seg.pitch = pitch
             seg.speed = speed
+            
+            # キャッシュを無効化（再生成をトリガーするため）
+            seg.audio_path = None
+            seg.raw_audio_path = None
+            # 波形表示をクリア
+            self.timeline_panel.clear_waveform_at(i)
             
         # UI更新（選択中のセグメントのパラメータを再表示）
         if 0 <= self._selected_segment < len(self.project.segments):
@@ -451,8 +457,8 @@ class MainWindow(QMainWindow):
         
         self.timeline_panel.update()
         self._update_title()
-        self.statusBar().showMessage("AI 文脈解析が完了しました", 3000)
-        logger.info("全セグメントの自動感情アノテーションを完了しました")
+        self.statusBar().showMessage("AI 文脈解析が完了しました（要再生成）", 5000)
+        logger.info("全セグメントの自動感情アノテーションとキャッシュリセットを完了しました")
 
     def _on_gen_segment_error(self, index: int, error: str):
         logger.error(f"セグメント {index + 1} の生成エラー: {error}")

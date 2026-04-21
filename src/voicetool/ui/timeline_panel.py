@@ -69,9 +69,15 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def clear_waveforms(self):
-        """波形データをクリア"""
+        """全ての波形データをクリア"""
         self._waveforms.clear()
         self.update()
+
+    def clear_waveform_at(self, index: int):
+        """指定したセグメントの波形データをクリア"""
+        if index in self._waveforms:
+            del self._waveforms[index]
+            self.update()
 
     def set_selected(self, index: int):
         """選択セグメントを設定"""
@@ -436,8 +442,12 @@ class TimelinePanel(QWidget):
         self.canvas.set_waveform(index, data)
 
     def clear_waveforms(self):
-        """波形データをクリア"""
+        """全ての波形データをクリア"""
         self.canvas.clear_waveforms()
+
+    def clear_waveform_at(self, index: int):
+        """指定したセグメントの波形データをクリア"""
+        self.canvas.clear_waveform_at(index)
 
     def set_selected(self, index: int):
         """選択セグメントを設定"""
