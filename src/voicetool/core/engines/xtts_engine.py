@@ -10,6 +10,7 @@ import traceback
 from typing import Optional, Callable
 
 import torch
+import numpy as np
 from voicetool.core.engine_base import BaseTTSEngine
 
 logger = logging.getLogger(__name__)

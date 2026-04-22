@@ -26,7 +26,6 @@ bin/
 models/
 projects/
 temp/
-docs/VoiceTool_Spec.txt
 
 # OS / IDE
 .DS_Store
@@ -36,6 +35,24 @@ Thumbs.db
 *.swp
 *.vproj_backup
 
+# Native Binaries
+*.dll
+*.lib
+*.pdb
+*.exp
+
 # Test files
 test_cache/
 dummy.wav
+
+# Local tools / scripts
+.env
+scratch/
+tools/
+dist_structure.txt
+patch.bat
+patch_tts_dist.py
+repair_binaries.py
+verification_logic.py
+build_native_zig.bat
+build_native.bat

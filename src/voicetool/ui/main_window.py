@@ -7,6 +7,7 @@ import os
 import sys
 import logging
 import traceback
+import numpy as np
 from typing import Optional
 
 from PyQt6.QtWidgets import (
@@ -57,6 +58,11 @@ class GenerateWorker(QThread):
         self.processor = audio_processor
         self.cache = cache_manager
         self.app_dir = app_dir
+        self._is_interrupted = False
+
+    def stop(self):
+        """スレッドを安全に停止"""
+        self._is_interrupted = True
 
     def run(self):
         import soundfile as sf
@@ -72,6 +78,10 @@ class GenerateWorker(QThread):
                 logger.error(f"リファレンス音声の変換に失敗: {e}")
 
         for i, seg in enumerate(self.project.segments):
+            if self._is_interrupted:
+                logger.info("ユーザーにより音声生成が中断されました")
+                break
+                
             if not seg.text.strip():
                 continue
 
@@ -82,7 +92,7 @@ class GenerateWorker(QThread):
                 cache_key = seg.cache_key(ref_audio, language)
                 cached = self.cache.get(cache_key)
 
-                if cached:
+                if cached and os.path.exists(cached):
                     seg.audio_path = cached
                     logger.info(f"セグメント {i+1}: キャッシュ使用")
                 else:
@@ -93,6 +103,9 @@ class GenerateWorker(QThread):
                         speaker_wav=ref_audio,
                         language=language,
                     ):
+                        if self._is_interrupted:
+                            raise InterruptedError("生成中断")
+                            
                         all_chunks.append(chunk)
                         # 生成中のデータを一部送信（インクリメンタル描画用）
                         self.partial_waveform_ready.emit(i, chunk)
@@ -128,6 +141,8 @@ class GenerateWorker(QThread):
 
                 self.segment_finished.emit(i, seg.audio_path or "")
 
+            except InterruptedError:
+                break
             except Exception as e:
                 logger.error(f"セグメント {i+1} エラー: {e}")
                 logger.error(traceback.format_exc())
@@ -138,9 +153,49 @@ class GenerateWorker(QThread):
         self.all_finished.emit()
 
 
+class LoadModelWorker(QThread):
+    """TTSモデル読み込みワーカースレッド"""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)  # (success, device_name)
+
+    def __init__(self, tts_engine):
+        super().__init__()
+        self.tts = tts_engine
+
+    def run(self):
+        try:
+            def progress_cb(msg):
+                self.progress.emit(msg)
+            self.tts.load_model(progress_callback=progress_cb)
+            self.finished.emit(True, self.tts.device)
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+
+class ExportWorker(QThread):
+    """音声書き出しワーカースレッド"""
+    finished = pyqtSignal(bool, str)  # (success, path_or_error)
+
+    def __init__(self, processor, paths, out_path, out_fmt):
+        super().__init__()
+        self.processor = processor
+        self.paths = paths
+        self.out_path = out_path
+        self.out_fmt = out_fmt
+
+    def run(self):
+        try:
+            self.processor.concatenate_segments(self.paths, self.out_path, self.out_fmt)
+            self.finished.emit(True, self.out_path)
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+
 class MainWindow(QMainWindow):
     """メインウィンドウ"""
 
+    def __init__(self, app_dir):
+        super().__init__()
         self.app_dir = app_dir
         self.project = Project()
         
@@ -159,6 +214,8 @@ class MainWindow(QMainWindow):
         self.player = AudioPlayer()
         self._selected_segment: int = -1
         self._generate_worker: Optional[GenerateWorker] = None
+        self._load_worker: Optional[LoadModelWorker] = None
+        self._export_worker: Optional[ExportWorker] = None
         self._cursor_timer = QTimer()
         self._cursor_timer.setInterval(50)  # 50ms間隔で更新
         self._cursor_timer.timeout.connect(self._update_cursor)
@@ -543,42 +600,61 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            self.statusBar().showMessage("音声を書き出し中...")
+            self.toolbar.export_action.setEnabled(False)
+            
             fmt = "mp3" if path.lower().endswith(".mp3") else "wav"
-            self.audio_processor.concatenate_segments(audio_paths, path, fmt)
-            QMessageBox.information(self, "完了", f"書き出しが完了しました:\n{path}")
-            logger.info(f"書き出し完了: {path}")
+            self._export_worker = ExportWorker(self.audio_processor, audio_paths, path, fmt)
+            self._export_worker.finished.connect(self._on_export_finished)
+            self._export_worker.start()
         except Exception as e:
-            QMessageBox.critical(self, "エラー", f"書き出しに失敗:\n{e}")
-            logger.error(f"書き出しエラー: {e}")
+            QMessageBox.critical(self, "エラー", f"書き出し準備中にエラーが発生:\n{e}")
+
+    def _on_export_finished(self, success: bool, info: str):
+        """書き出し完了時のコールバック"""
+        self.toolbar.export_action.setEnabled(True)
+        if success:
+            QMessageBox.information(self, "完了", f"書き出しが完了しました:\n{info}")
+            self.statusBar().showMessage("書き出し完了", 5000)
+        else:
+            QMessageBox.critical(self, "エラー", f"書き出しに失敗:\n{info}")
+            self.statusBar().showMessage("書き出し失敗")
+            logger.error(f"書き出しエラー: {info}")
 
     # === TTSモデル読み込み ===
 
     def load_tts_model(self):
-        """TTSモデルを読み込む（起動時に呼ばれる）"""
-        try:
-            def progress_cb(msg):
-                self.statusBar().showMessage(msg)
-                logger.info(msg)
+        """TTSモデルを非同期で読み込む"""
+        if self._load_worker and self._load_worker.isRunning():
+            return
 
-            self.tts_engine.load_model(progress_callback=progress_cb)
-            device = self.tts_engine.device
+        self.device_label.setText("デバイス: 読み込み中...")
+        self.device_label.setStyleSheet(f"color: {COLORS['text_secondary']}; padding-right: 8px;")
+
+        self._load_worker = LoadModelWorker(self.tts_engine)
+        self._load_worker.progress.connect(lambda msg: self.statusBar().showMessage(msg))
+        self._load_worker.finished.connect(self._on_load_model_finished)
+        self._load_worker.start()
+
+    def _on_load_model_finished(self, success: bool, info: str):
+        """モデル読み込み完了時のコールバック"""
+        if success:
+            device = info
             self.device_label.setText(f"デバイス: {device.upper()}")
             if device == "cuda":
                 self.device_label.setStyleSheet(f"color: {COLORS['success']}; padding-right: 8px;")
             else:
                 self.device_label.setStyleSheet(f"color: {COLORS['warning']}; padding-right: 8px;")
-
-        except Exception as e:
-            logger.error(f"TTSモデルの読み込みに失敗: {e}")
+            self.statusBar().showMessage("TTS モデル準備完了", 3000)
+            logger.info(f"TTSモデル読み込み成功 ({device})")
+        else:
+            logger.error(f"TTSモデル読み込み失敗: {info}")
             self.device_label.setText("デバイス: エラー")
             self.device_label.setStyleSheet(f"color: {COLORS['error']}; padding-right: 8px;")
             QMessageBox.warning(
                 self,
                 "TTSモデル読み込みエラー",
-                f"TTSモデルの読み込みに失敗しました。\n"
-                f"音声生成機能は使用できません。\n\n"
-                f"エラー: {e}\n\n"
-                f"インターネット接続を確認し、再起動してください。",
+                f"TTSモデルの読み込みに失敗しました。\n\nエラー: {info}",
             )
 
     def closeEvent(self, event):
@@ -598,6 +674,7 @@ class MainWindow(QMainWindow):
         self.player.stop()
         self._cursor_timer.stop()
         if self._generate_worker and self._generate_worker.isRunning():
-            self._generate_worker.terminate()
+            self._generate_worker.stop()
+            self._generate_worker.wait(2000) # 終了を待機
         self.audio_processor.cleanup_temp()
         event.accept()

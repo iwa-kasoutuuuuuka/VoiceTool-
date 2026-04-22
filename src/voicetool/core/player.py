@@ -49,7 +49,11 @@ class AudioPlayer:
         on_position_changed: Optional[Callable[[float], None]] = None,
         on_playback_finished: Optional[Callable[[], None]] = None,
     ):
-        """コールバックを設定"""
+        """
+        コールバックを設定。
+        注意: これらのコールバックはオーディオ処理用のリアルタイムスレッドから直接呼び出されます。
+        UI操作を行う場合は、必ずメインスレッド（Qtのシグナル送信など）を介してください。
+        """
         self._on_position_changed = on_position_changed
         self._on_playback_finished = on_playback_finished
 
@@ -150,19 +154,21 @@ class AudioPlayer:
             self._playing = False
 
     def stop(self):
-        """再生停止"""
+        """再生停止（確実にリソースを解放）"""
         with self._lock:
             self._playing = False
 
         if self._stream is not None:
             try:
-                self._stream.stop()
+                if self._stream.active:
+                    self._stream.stop()
                 self._stream.close()
-            except Exception:
-                pass
-            self._stream = None
-            self._position = 0
-            logger.info("再生停止")
+            except Exception as e:
+                logger.debug(f"ストリームクローズ中の軽微なエラー: {e}")
+            finally:
+                self._stream = None
+                self._position = 0
+                logger.info("再生停止")
 
     def get_waveform_data(self) -> Optional[np.ndarray]:
         """波形データを返す"""

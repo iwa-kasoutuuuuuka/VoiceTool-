@@ -139,7 +139,10 @@ class Project:
             if seg.duration > 0:
                 seg.end = seg.start + seg.duration
             else:
-                # 音声未生成の場合、テキスト長から概算
-                estimated = max(0.5, len(seg.text) * 0.15)
+                # 音声未生成の場合、テキスト長から概算（日本語と英語で重みを変える）
+                char_count = len(seg.text)
+                # 日本語（全角）を含む場合は少し長め、英語（半角のみ）は短めに重み付け
+                weight = 0.18 if any(ord(c) > 127 for c in seg.text) else 0.1
+                estimated = max(0.4, char_count * weight)
                 seg.end = seg.start + estimated
             current_time = seg.end + seg.pause_after

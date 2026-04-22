@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QPainter, QColor, QPen, QLinearGradient, QPainterPath
 
 from voicetool.ui.styles import COLORS
+from voicetool.core.native_bridge import NativeBridge
 
 
 class WaveformWidget(QWidget):
@@ -58,7 +59,21 @@ class WaveformWidget(QWidget):
             self._cache_width = width
             return self._downsample_cache
 
-        # ブロックごとにmin/maxを取ってエンベロープを描く
+        # ネイティブエンジンの使用を試みる
+        if NativeBridge.is_available():
+            envelope = NativeBridge.get_envelope(self._data, width)
+            if envelope is not None:
+                mins, maxs = envelope
+                # 既存のロジックに合わせて交互に配置
+                combined = np.empty(width * 2, dtype=np.float32)
+                combined[0::2] = mins
+                combined[1::2] = maxs
+                self._downsample_cache = combined
+                self._cache_width = width
+                return combined
+
+        # フォールバック: パイソン実装
+        n = len(self._data)
         block_size = max(1, n // width)
         blocks = n // block_size
         trimmed = self._data[:blocks * block_size].reshape(blocks, block_size)

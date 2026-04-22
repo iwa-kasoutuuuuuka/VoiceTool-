@@ -12,6 +12,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import uuid
 import logging
 import shutil
 from typing import Optional
@@ -34,11 +35,19 @@ class AudioProcessor:
         self.ffmpeg_path = os.path.join(bin_dir, "ffmpeg.exe")
         self.rubberband_path = os.path.join(bin_dir, "rubberband.exe")
         self.temp_dir = temp_dir
+        
+        # バイナリの存在チェック（早期発見）
+        if not os.path.exists(self.ffmpeg_path):
+            logger.error(f"ffmpegが見つかりません: {self.ffmpeg_path}")
+        if not os.path.exists(self.rubberband_path):
+            logger.error(f"rubberbandが見つかりません: {self.rubberband_path}")
+            
         os.makedirs(temp_dir, exist_ok=True)
 
     def _get_temp_path(self, suffix: str = ".wav") -> str:
-        """一時ファイルパスを生成"""
-        return tempfile.mktemp(suffix=suffix, dir=self.temp_dir, prefix="proc_")
+        """一時ファイルパスを安全に生成（uuid使用）"""
+        filename = f"proc_{uuid.uuid4().hex}{suffix}"
+        return os.path.join(self.temp_dir, filename)
 
     def _run_command(self, cmd: list, description: str = ""):
         """外部コマンドを実行（堅牢性強化版）"""

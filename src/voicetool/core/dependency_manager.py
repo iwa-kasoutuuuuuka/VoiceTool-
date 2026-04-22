@@ -49,6 +49,11 @@ class DependencyManager:
 
     def _define_dependencies(self) -> List[Dependency]:
         """チェックする依存関係を定義"""
+        # XTTS v2 モデルファイル
+        # Coqui TTS の標準的なキャッシュパス構造に合わせる
+        MODEL_BASE = "https://huggingface.co/coqui/XTTS-v2/resolve/v2.0.2/"
+        MODEL_DIR = os.path.join("models", "tts_models--multilingual--multi-dataset--xtts_v2")
+
         return [
             Dependency(
                 name="FFmpeg",
@@ -65,6 +70,34 @@ class DependencyManager:
                 is_archive=True,
                 extract_to="bin",
                 file_in_archive="rubberband.exe",
+            ),
+            Dependency(
+                name="TTS Model (Main)",
+                check_path=os.path.join(MODEL_DIR, "model.pth"),
+                download_url=MODEL_BASE + "model.pth",
+                is_archive=False,
+                extract_to=MODEL_DIR,
+            ),
+            Dependency(
+                name="TTS Model (Config)",
+                check_path=os.path.join(MODEL_DIR, "config.json"),
+                download_url=MODEL_BASE + "config.json",
+                is_archive=False,
+                extract_to=MODEL_DIR,
+            ),
+            Dependency(
+                name="TTS Model (Vocab)",
+                check_path=os.path.join(MODEL_DIR, "vocab.json"),
+                download_url=MODEL_BASE + "vocab.json",
+                is_archive=False,
+                extract_to=MODEL_DIR,
+            ),
+            Dependency(
+                name="TTS Model (Speakers)",
+                check_path=os.path.join(MODEL_DIR, "speakers_xtts.pth"),
+                download_url=MODEL_BASE + "speakers_xtts.pth",
+                is_archive=False,
+                extract_to=MODEL_DIR,
             ),
         ]
 
@@ -128,7 +161,10 @@ class DependencyManager:
                             f.write(chunk)
                             downloaded += len(chunk)
                             if progress_callback:
-                                progress_callback(downloaded, total_size, "ダウンロード中...")
+                                # progress_callback が False を返した場合は中断とみなす
+                                if progress_callback(downloaded, total_size, "ダウンロード中...") is False:
+                                    logger.info("ダウンロードがユーザーによって中断されました")
+                                    raise InterruptedError("ダウンロードがキャンセルされました")
 
                 logger.info(f"ダウンロード完了: {url} -> {dest_path}")
                 return dest_path
@@ -157,10 +193,13 @@ class DependencyManager:
         os.makedirs(extract_to, exist_ok=True)
 
         with zipfile.ZipFile(archive_path, "r") as zf:
+            namelist = zf.namelist()
+            total_files = len(namelist)
+
             if file_in_archive:
                 # 特定ファイルのみ抽出
                 target_files = [
-                    n for n in zf.namelist()
+                    n for n in namelist
                     if n.endswith(file_in_archive) and not n.endswith("/")
                 ]
                 if not target_files:
@@ -168,14 +207,23 @@ class DependencyManager:
                         f"アーカイブ内に {file_in_archive} が見つかりません"
                     )
 
-                for tf in target_files:
+                for i, tf in enumerate(target_files):
+                    if progress_callback:
+                        if progress_callback(i, len(target_files), f"抽出中: {os.path.basename(tf)}") is False:
+                            raise InterruptedError("展開がキャンセルされました")
+                    
                     data = zf.read(tf)
                     dest = os.path.join(extract_to, os.path.basename(tf))
                     with open(dest, "wb") as f:
                         f.write(data)
                     logger.info(f"抽出: {tf} -> {dest}")
             else:
-                zf.extractall(extract_to)
+                # 全て抽出
+                for i, member in enumerate(namelist):
+                    if progress_callback:
+                        if progress_callback(i, total_files, f"展開中: {member}") is False:
+                            raise InterruptedError("展開がキャンセルされました")
+                    zf.extract(member, extract_to)
 
         if progress_callback:
             progress_callback(1, 1, "展開完了")

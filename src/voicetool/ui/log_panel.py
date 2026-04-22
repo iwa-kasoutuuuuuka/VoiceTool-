@@ -55,6 +55,7 @@ class LogPanel(QWidget):
         self.log_text.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {COLORS['bg_input']};
+                color: {COLORS['text_primary']};
                 border: none;
                 border-radius: 0;
                 font-family: 'Consolas', 'Yu Gothic UI', monospace;

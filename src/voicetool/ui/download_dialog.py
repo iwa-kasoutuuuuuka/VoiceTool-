@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 
-from voicetool.ui.styles import COLORS
+from voicetool.ui.styles import COLORS, get_stylesheet
 from voicetool.core.dependency_manager import DependencyManager, Dependency
 
 from typing import List
@@ -29,17 +29,27 @@ class DownloadWorker(QThread):
         super().__init__()
         self.manager = manager
         self.missing = missing
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
 
     def run(self):
         for dep in self.missing:
+            if self._is_cancelled:
+                break
             self.item_started.emit(dep.name)
             try:
                 def progress_cb(downloaded, total, status):
                     self.progress.emit(status, downloaded, total)
+                    return not self._is_cancelled
 
                 self.manager.install_dependency(dep, progress_callback=progress_cb)
                 self.item_finished.emit(dep.name)
 
+            except InterruptedError:
+                self.error.emit(dep.name, "キャンセルされました")
+                break
             except Exception as e:
                 self.error.emit(dep.name, str(e))
 
@@ -59,9 +69,10 @@ class DownloadDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("セットアップ")
-        self.setMinimumWidth(500)
-        self.setMinimumHeight(300)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
         self.setModal(True)
+        self.setStyleSheet(get_stylesheet())
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
         )
@@ -120,7 +131,10 @@ class DownloadDialog(QDialog):
         self.log_text.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {COLORS['bg_input']};
-                font-family: Consolas, monospace;
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 11px;
             }}
         """)
@@ -129,6 +143,10 @@ class DownloadDialog(QDialog):
         # ボタン
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
+
+        self.cancel_btn = QPushButton("キャンセル")
+        self.cancel_btn.clicked.connect(self._on_cancel_clicked)
+        btn_layout.addWidget(self.cancel_btn)
 
         self.close_btn = QPushButton("閉じる")
         self.close_btn.setEnabled(False)
@@ -163,25 +181,47 @@ class DownloadDialog(QDialog):
     def _on_item_started(self, name: str):
         """アイテムのダウンロード開始"""
         self.current_label.setText(f"📥 {name} をダウンロード中...")
-        self.log_text.append(f"開始: {name}")
+        log_html = f'<span style="color: {COLORS["text_secondary"]};">開始: {name}</span>'
+        self.log_text.append(log_html)
         self.progress_bar.setValue(0)
 
     def _on_item_finished(self, name: str):
         """アイテムのダウンロード完了"""
-        self.log_text.append(f"✅ 完了: {name}")
+        log_html = f'<span style="color: {COLORS["success"]};">✅ 完了: {name}</span>'
+        self.log_text.append(log_html)
 
     def _on_error(self, name: str, error: str):
         """エラー発生"""
         self.errors.append(f"{name}: {error}")
-        self.log_text.append(f"❌ エラー: {name} — {error}")
+        log_html = f'<span style="color: {COLORS["error"]};">❌ エラー: {name} — {error}</span>'
+        self.log_text.append(log_html)
         self.current_label.setText(f"❌ {name} のダウンロードに失敗")
         self.current_label.setStyleSheet(f"color: {COLORS['error']}; font-weight: 600;")
+
+    def _on_cancel_clicked(self):
+        """キャンセルボタンクリック時"""
+        if self.worker.isRunning():
+            self.worker.cancel()
+            self.cancel_btn.setEnabled(False)
+            self.current_label.setText("🛑 中断しています...")
+            log_html = f'<span style="color: {COLORS["warning"]};">ユーザーによって中断されました。</span>'
+            self.log_text.append(log_html)
+        else:
+            self.reject()
 
     def _on_all_finished(self):
         """全てのダウンロード完了"""
         self.close_btn.setEnabled(True)
+        self.cancel_btn.setText("閉じる")
+        self.cancel_btn.setEnabled(True)
+        # 一度「閉じる」に統合するため古い方は隠すかそのまま
+        self.close_btn.hide() 
 
-        if not self.errors:
+        if self.worker._is_cancelled:
+            self.success = False
+            self.current_label.setText("🛑 中断されました")
+            self.current_label.setStyleSheet(f"color: {COLORS['error']}; font-weight: 600;")
+        elif not self.errors:
             self.success = True
             self.current_label.setText("✅ セットアップ完了！")
             self.current_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: 600;")
