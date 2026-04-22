@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" width="200" alt="VoiceTool Icon">
+</p>
+
 # VoiceTool v1.3.0 — Production Stability Update 💎
 
 VoiceTool は、最新の AI 音声合成技術と直感的なタイムライン編集を融合させた、プロフェッショナル向け音声制作スタジオです。
